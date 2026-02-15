@@ -4,6 +4,71 @@ $Host.UI.RawUI.WindowTitle = "Nathaniel Ritchie RandomScript"
 # Force TLS 1.2 or higher (TLS 1.0 and 1.1 are deprecated)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
+
+# Seans test mode - nr
+$nrtestmode = $true
+
+# Global ENUM do not touch please - all SQL is based upon this for selection of UOM.
+
+enum UOM {
+    Eaches = 1
+    Totes = 2
+    Cartons = 3
+}
+
+enum DECANT_UOM{
+    Eaches = 1
+    Totes = 2
+    Cartons = 3
+}
+
+
+enum PICK_STATE{
+    CREATING
+    EXPECTED
+    PENDING
+    WAIT_ALLOCATION
+    UNSATISFIABLE
+    ALLOCATED
+    UNPICKABLE
+    WAIT_STOCK
+    RESERVED
+    STARTED
+    PICKED
+    COLLATING
+    COLLATED
+    PACKABLE
+    PACKING
+    PACKED
+    BUFFERED
+    UNREACHABLE
+    MARSHALLING
+    MARSHALLED
+    LOADING
+    LOADED
+    DESPATCHED
+    FINISHED
+    ABANDONED
+    CANCELLED
+}
+
+enum PICK_STATE_DASHBOARD {
+    <#These are the ones we care about mainly...#>
+    PENDING
+    WAIT_ALLOCATION
+    UNSATISFIABLE
+    UNPICKABLE
+    WAIT_STOCK
+    RESERVED
+    STARTED
+    PICKED
+    MARSHALLED
+    LOADED
+    DESPATCHED
+    FINISHED
+    ABANDONED
+    CANCELLED
+}
 # SQL Server connection settings - Windows Authentication
 $global:SQLServer   = "SQLDBAUP010"
 $global:SQLDatabase = "prodmis"
@@ -43,7 +108,7 @@ function MainMenu {
         Write-Host "             [1] Fill Percentage                          - AUKC01"
         Write-Host "             [2] Inventory Query Menu                     - AUKC01"
         Write-Host "             [3] KPIsMenu                                 - AUKC01"
-        Write-Host "             [4] Again Another                            - AUKC01"
+        Write-Host "             [4] Picks By Day                             - AUKC01"
         Write-Host "             __________________________________________________"
         Write-Host ""
         Write-Host "             [5] Random Selection 5"
@@ -64,7 +129,7 @@ function MainMenu {
             "1" { FillPercentage }
             "2" { InventoryQueryMenu }
             "3" { KPIsMenu }
-            "4" { Write-Host "Option 4 not implemented"; Pause }
+            "4" { EachesPerDay }
             "5" { Write-Host "Option 5 not implemented"; Pause }
             "6" { Write-Host "Option 6 not implemented"; Pause }
             "7" { Write-Host "Option 7 not implemented"; Pause }
@@ -175,7 +240,7 @@ QUERIES SECTION START
 #>
 
 function FillPercentageQuery {
-   
+    
     return @"
 ;WITH order_fill AS (
     SELECT
@@ -199,31 +264,106 @@ ORDER BY o.num_lines;
 }
 
 function DecantPerformanceQuery {
+    
     param   (
-        [string]$targetDate = "2026-02-09" #(Get-Date -Format "yyyy-MM-dd")  # Default to today's date
+        [string]$targetDate = "2026-02-12", #(Get-Date -Format "yyyy-MM-dd"),  # Default to today's date
+        
+
+        # Will change to param for user input
+        [DECANT_UOM]$uom = 3
+        #1 is EACH
+        #2 is TOTE
+        #3 is CARTONS  # Assuming 1 represents Eaches, can be adjusted based on actual UOM values in the database
     )
-   
-    return @"
-    SELECT
-    change_uid AS [User],
-    DATEPART(HOUR, event_time) AS [Hour],
-    SUM(quantity) AS [Eaches]
-FROM mi_decant
-WHERE CAST(event_time AS DATE) = '$targetDate'
-    AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
-    AND change_uid IS NOT NULL
-    AND quantity IS NOT NULL
-GROUP BY change_uid, DATEPART(HOUR, event_time)
-ORDER BY change_uid, DATEPART(HOUR, event_time);
+
+
+    # messsssyyyyy - make a switch statement later.    
+    if ($uom -eq 1) {
+        return @"
+        SELECT 
+        change_uid AS [User],
+        DATEPART(HOUR, event_time) AS [Hour],
+        SUM(quantity) AS [Eaches]
+    FROM mi_decant
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
+        AND change_uid IS NOT NULL
+        AND quantity IS NOT NULL
+    GROUP BY change_uid, DATEPART(HOUR, event_time)
+    ORDER BY change_uid, DATEPART(HOUR, event_time);
 "@
+    } else {
+        
+        # We want to count number of TOTES. Therefore we change the query.
+        if ($uom -eq 2){
+            return @"
+            SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(tote_id) AS [Eaches]
+        FROM mi_decant
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+        } else {
+            if ($uom -eq 3){
+                return @"
+                SELECT 
+                change_uid AS [User],
+                DATEPART(HOUR, event_time) AS [Hour],
+                COUNT(DISTINCT(case_id)) AS [Eaches]
+            FROM mi_decant
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+                AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
+                AND change_uid IS NOT NULL
+                AND quantity IS NOT NULL
+            GROUP BY change_uid, DATEPART(HOUR, event_time)
+            ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+            }
+        }
+
+    }
+    
 
 }
 
 
+function EachesPerDayQuery {
+    
+    param(
+        [string]$targetDate = "2026-02-12", #(Get-Date -Format "yyyy-MM-dd")  # Default to today's date
+        [string]$userFilter = $true #Will make a switch later.
+    )
+
+    [string]$PriorityTime = "priority_time"
+    [String]$DespatchTime = "required_despatch_time"
+    
+    switch ($userFilter) {
+        $true { $filter = $DespatchTime; break }
+        Default { $filter = $PriorityTime}
+    }
+    
+
+    return @"
+    SELECT 
+        pick_state AS [State],
+        DATEPART(DAY,$filter) AS [DateDay],
+        SUM(each_qty) AS [Eaches]
+    FROM x_pick
+    GROUP BY pick_state, DATEPART(DAY,$filter);
+"@
+
+}
 <#
 
-QUERIES SECTION END
-
+ QUERIES SECTION END
 #
 #
 #
@@ -254,10 +394,10 @@ QUERIES SECTION END
 
 #>
 function UserSelectDate{
-   
+    
     # Prompt for date selection
     $dateInput = Read-Host "Enter date (YYYY-MM-DD) or press Enter for today"
-   
+    
     if ([string]::IsNullOrWhiteSpace($dateInput)) {
         $targetDate = Get-Date -Format "yyyy-MM-dd"
     } else {
@@ -274,6 +414,139 @@ function UserSelectDate{
 }
 
 
+function TableDisplay{
+    
+        # Just pulling in all the information.
+        # Data is the raw data. This is not to be manipulated here - only for display purposes.
+        param(
+            [Parameter(Mandatory=$true)]
+            [array]$Data,
+            
+            [Parameter(Mandatory=$true)]
+            [string]$RowProperty,      # e.g., "User"
+            
+            [Parameter(Mandatory=$true)]
+            [string]$ColumnProperty,   # e.g., "Hour"
+            
+            [Parameter(Mandatory=$true)]
+            [string]$ValueProperty,    # e.g., "Eaches"
+            
+            [hashtable]$ColorThresholds = @{},  # Optional color coding
+            
+            [int]$MinRowPadding = 15,
+            [int]$MinColPadding = 6,
+            [int]$ExtraPadding = 2  # Extra space between columns for breathing room
+        )
+    
+        # Extract unique rows and columns from data
+        $rows = $Data | Select-Object -ExpandProperty $RowProperty -Unique | Sort-Object
+        $columns = $Data | Select-Object -ExpandProperty $ColumnProperty -Unique | Sort-Object
+    
+        # Calculate optimal row width (based on longest row label)
+        $maxRowLength = ($rows | ForEach-Object { $_.ToString().Length } | Measure-Object -Maximum).Maximum
+        $maxRowLength = [Math]::Max($maxRowLength, $RowProperty.Length)
+        $RowPadding = [Math]::Max($MinRowPadding, $maxRowLength + $ExtraPadding)
+    
+        # Calculate optimal column widths (each column can have different width)
+        $columnWidths = @{}
+        foreach ($col in $columns) {
+            $colDisplay = if ($ColumnProperty -eq "Hour") { "{0:D2}h" -f $col } else { $col }
+            $maxColWidth = $colDisplay.ToString().Length
+            
+            # Check all values in this column
+            $columnValues = $Data | Where-Object { $_.$ColumnProperty -eq $col } | 
+                            Select-Object -ExpandProperty $ValueProperty
+            $maxValueWidth = ($columnValues | ForEach-Object { 
+                if ($null -ne $_ -and $_ -ne 0) { $_.ToString().Length } else { 1 } 
+            } | Measure-Object -Maximum).Maximum
+            
+            if ($null -ne $maxValueWidth) {
+                $maxColWidth = [Math]::Max($maxColWidth, $maxValueWidth)
+            }
+            
+            $columnWidths[$col] = [Math]::Max($MinColPadding, $maxColWidth + $ExtraPadding)
+        }
+    
+        # Calculate total width for the table
+        $totalColWidth = ($columnWidths.Values | Measure-Object -Sum).Sum
+        $totalWidth = $RowPadding + $totalColWidth + 10
+    
+        # Header row
+        Write-Host ($RowProperty.PadRight($RowPadding)) -NoNewline -ForegroundColor Cyan
+        foreach ($col in $columns) {
+            $colDisplay = if ($ColumnProperty -eq "Hour") { "{0:D2}h" -f $col } else { $col }
+            $width = $columnWidths[$col]
+            Write-Host ($colDisplay.ToString().PadLeft($width)) -NoNewline -ForegroundColor Cyan
+        }
+        Write-Host ("  Total".PadLeft(8)) -ForegroundColor Cyan
+        Write-Host ("-" * $totalWidth) -ForegroundColor Gray
+    
+        # Data rows
+        foreach ($row in $rows) {
+            $rowTotal = 0
+            Write-Host ($row.ToString().PadRight($RowPadding)) -NoNewline
+    
+            foreach ($col in $columns) {
+                $width = $columnWidths[$col]
+                
+                # Get the value for this row/column intersection
+                $value = ($Data | Where-Object { 
+                    $_.$RowProperty -eq $row -and $_.$ColumnProperty -eq $col 
+                }).$ValueProperty
+    
+                if ($null -eq $value -or $value -eq 0) {
+                    Write-Host (" " * ($width - 1) + "-") -NoNewline -ForegroundColor DarkGray
+                } else {
+                    $rowTotal += $value
+                    
+                    # Apply color coding if thresholds provided
+                    $color = Get-CellColor -Value $value -Thresholds $ColorThresholds
+                    Write-Host ("{0,$width}" -f $value) -NoNewline -ForegroundColor $color
+                }
+            }
+            Write-Host ("{0,8}" -f $rowTotal) -ForegroundColor Cyan
+        }
+    
+        # Column totals row
+        Write-Host ("-" * $totalWidth) -ForegroundColor Gray
+        Write-Host (($ColumnProperty.ToUpper() + " TOTAL").PadRight($RowPadding)) -NoNewline -ForegroundColor Cyan
+        
+        $grandTotal = 0
+        foreach ($col in $columns) {
+            $width = $columnWidths[$col]
+            $colTotal = ($Data | Where-Object { $_.$ColumnProperty -eq $col } | 
+                         Measure-Object -Property $ValueProperty -Sum).Sum
+            if ($colTotal -gt 0) {
+                Write-Host ("{0,$width}" -f $colTotal) -NoNewline -ForegroundColor Cyan
+                $grandTotal += $colTotal
+            } else {
+                Write-Host (" " * ($width - 1) + "-") -NoNewline -ForegroundColor DarkGray
+            }
+        }
+        Write-Host ("{0,8}" -f $grandTotal) -ForegroundColor Green
+    
+}
+
+function Get-CellColor {
+    param(
+        [int]$Value,
+        [hashtable]$Thresholds
+    )
+
+    if ($Thresholds.Count -eq 0) {
+        return "White"
+    }
+
+    if ($Value -ge $Thresholds.High) {
+        return "Green"
+    } elseif ($Value -ge $Thresholds.Medium) {
+        return "Yellow"
+    } else {
+        return "Red"
+    }
+}
+
+
 function FillPercentage {
     param (
         [string]$query = (FillPercentageQuery)
@@ -284,7 +557,7 @@ function FillPercentage {
 
     try {
         # Execute the query using SQLdirector function
-        $data = SQLdirector -query $query
+        $data = SQLdirector -query $query 
         $data | Format-Table -AutoSize
         Pause
     }
@@ -299,38 +572,33 @@ function FillPercentage {
 
 function DecantPerformance {
     param (
-        [string]$query = (DecantPerformanceQuery)
+        [string]$query = (DecantPerformanceQuery),
+        [int]$refreshInterval = 60
     )
 
     #Unsure if want another function to obtain DecantKPISettings but all welllll.
     $Decant_high = 100
-    $Decant_medium = 50
-
-    #Unsure if want another function to obtain OverAll RefreshSettings but all welllll.
-    $refreshInterval = 900  # 15 minutes in seconds
+    $Decant_medium = 50    
     $continueRunning = $true
 
-   
 
-    while($continueRunning) {
+    
+       
         Clear-Host
         Write-Host "==================================================================" -ForegroundColor Cyan
         Write-Host "                  DECANT PERFORMANCE - HOURLY BREAKDOWN" -ForegroundColor Cyan
         Write-Host "==================================================================" -ForegroundColor Cyan
         Write-Host ""
-       
-        #Possible to get user date by calling UserSelectDate but for now just defaulting to today for ease of use
-        #link is not working lol - reason is due to the fact I am doing a string passing and need to edit said string.
-       
+
+        
         #$targetDate = Get-Date -Format "yyyy-MM-dd"
-        $targetDate = "2026-02-09"
+        $targetDate = "Linklost..." #placeholder for now - need to edit the query string to pass this in properly.
         Write-Host "Querying decant data for: $targetDate" -ForegroundColor Green
         Write-Host ""
 
         try {
-            # Execute the query
+             # Execute the query
             $data = SQLdirector -query $query
-
             if ($data.Rows.Count -eq 0) {
                 Write-Host "No decant data found for $targetDate" -ForegroundColor Yellow
                 Pause
@@ -339,68 +607,22 @@ function DecantPerformance {
 
             # Convert to PowerShell objects for easier manipulation
             $results = @()
-           
+            
             foreach ($row in $data) {
                 $results += [PSCustomObject]@{
                     User   = $row.User
                     Hour   = $row.Hour
                     Eaches = $row.Eaches
                 }
-           
+            
             }
+            
+            TableDisplay -Data $results `
+                    -RowProperty "User" `
+                    -ColumnProperty "Hour" `
+                    -ValueProperty "Eaches" `
+                    -ColorThresholds @{High = $Decant_high; Medium = $Decant_medium}
 
-            # Create pivot table (Users as rows, Hours as columns)
-            $users = $results | Select-Object -ExpandProperty User -Unique | Sort-Object
-            $hours = 0..23  # All possible hours in a day
-
-            # Build the pivot table
-            Write-Host ("User".PadRight(15)) -NoNewline -ForegroundColor Cyan
-            foreach ($hour in $hours) {
-                Write-Host ("{0:D2}h" -f $hour).PadLeft(6) -NoNewline -ForegroundColor Cyan
-            }
-            Write-Host ("  Total".PadLeft(8)) -ForegroundColor Cyan
-            Write-Host ("-" * 165) -ForegroundColor Gray
-
-            foreach ($user in $users) {
-                $userTotal = 0
-                Write-Host ($user.PadRight(15)) -NoNewline
-
-                foreach ($hour in $hours) {
-                    $eaches = ($results | Where-Object { $_.User -eq $user -and $_.Hour -eq $hour }).Eaches
-                   
-                    if ($null -eq $eaches -or $eaches -eq 0) {
-                        Write-Host "     -" -NoNewline -ForegroundColor DarkGray
-                    } else {
-                        $userTotal += $eaches
-                        # Color coding for performance
-                        if ($eaches -ge $Decant_high) {
-                            Write-Host ("{0,6}" -f $eaches) -NoNewline -ForegroundColor Green
-                        } elseif ($eaches -ge $Decant_medium) {
-                            Write-Host ("{0,6}" -f $eaches) -NoNewline -ForegroundColor Yellow
-                        } else {
-                            Write-Host ("{0,6}" -f $eaches) -NoNewline -ForegroundColor Red
-                        }
-                    }
-                }
-                Write-Host ("{0,8}" -f $userTotal) -ForegroundColor Cyan
-            }
-
-
-           
-            # Hourly totals row
-            Write-Host ("-" * 165) -ForegroundColor Gray
-            Write-Host ("HOURLY TOTAL".PadRight(15)) -NoNewline -ForegroundColor Cyan
-            $grandTotal = 0
-            foreach ($hour in $hours) {
-                $hourTotal = ($results | Where-Object { $_.Hour -eq $hour } | Measure-Object -Property Eaches -Sum).Sum
-                if ($hourTotal -gt 0) {
-                    Write-Host ("{0,6}" -f $hourTotal) -NoNewline -ForegroundColor Cyan
-                    $grandTotal += $hourTotal
-                } else {
-                    Write-Host "     -" -NoNewline -ForegroundColor DarkGray
-                }
-            }
-            Write-Host ("{0,8}" -f $grandTotal) -ForegroundColor Green
 
             Write-Host ""
             Write-Host "==================================================================" -ForegroundColor Cyan
@@ -413,68 +635,94 @@ function DecantPerformance {
 
 
             # Last updated timestamp
-            $lastUpdated = Get-Date -Format "HH:mm:ss"
             Write-Host ""
-            Write-Host "Last Updated: $lastUpdated" -ForegroundColor Green
-           
-            Pause
+            Write-Host "Last Updated: $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Green
+            
         }
         catch {
             Write-Host "Error retrieving decant performance data: $_" -ForegroundColor Red
             Pause
         }
 
-        # This all below for refreshing could quite literally be considered an overall performance function somewhere else lol..... This code is getting messy but it works for now and I want to get the other KPIs in there before I refactor the whole thing.
-
-        # Countdown timer with key detection
+        <# Refresh fix but not working so fix needs a fix.
         Write-Host ""
-        Write-Host "Next refresh in: " -NoNewline
-       
         $secondsRemaining = $refreshInterval
         $keyPressed = $false
 
-        while ($secondsRemaining -gt 0 -and -not $keyPressed) {
-            # Check if a key has been pressed
+        while ($secondsRemaining -gt 0 -and -not $keyPressed -or $nrtestmode) {
+            
             if ($host.UI.RawUI.KeyAvailable) {
                 $key = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-               
-                # Check for Enter or Escape or Q key
-                if ($key.VirtualKeyCode -eq 13 -or $key.VirtualKeyCode -eq 27 -or $key.VirtualKeyCode -eq 81) {  # 13=Enter, 27=Esc, 81=Q
+                
+                if ($key.VirtualKeyCode -eq 13 -or $key.VirtualKeyCode -eq 27 -or $key.VirtualKeyCode -eq 81) {
                     $keyPressed = $true
                     $continueRunning = $false
-                    Write-Host "`n`nReturning to KPI menu..." -ForegroundColor Yellow
-                    Start-Sleep -Seconds 1
-                    break
+                    Clear-Host
+                    Write-Host "Returning to menu..." -ForegroundColor Yellow
                 }
             }
 
-            # Display countdown
             $minutes = [math]::Floor($secondsRemaining / 60)
             $seconds = $secondsRemaining % 60
-           
-            # Move cursor to beginning of line and overwrite
-            $cursorPosition = $host.UI.RawUI.CursorPosition
-            $cursorPosition.X = 17  # Position after "Next refresh in: "
-            $host.UI.RawUI.CursorPosition = $cursorPosition
-           
-            Write-Host ("{0:D2}:{1:D2}" -f $minutes, $seconds) -NoNewline -ForegroundColor Cyan
-           
+
+            [int]$intMinutes = $minutes
+            [int]$intSeconds = $seconds
+
+            Write-Host ("`rNext refresh in: {0:D2}:{1:D2}  (Press Enter/Esc/Q to exit)" -f $intMinutes, $intSeconds) -NoNewline -ForegroundColor Cyan
+            
             Start-Sleep -Seconds 1
             $secondsRemaining--
-        }
 
-        # If we exited due to timeout (not key press), continue the loop
-        if (-not $keyPressed) {
-            Write-Host "`n`nRefreshing data..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 1
-        }
-   
-
-        #this god damn bracket is for the while loop.
-    }
-   
+            if (-not $keyPressed){
+             Write-Host "`n`rRefreshing data..." -ForegroundColor Yellow
+            
+            } 
+        #>
+        
+    
+    
 }
 
+
+function EachesPerDay {
+    param (
+        [string]$query = (EachesPerDayQuery)
+    )
+
+    Clear-Host
+    Write-Host "Eaches Per Day Query" -ForegroundColor Green
+
+    try {
+        # Execute the query using SQLdirector function
+        $data = SQLdirector -query $query 
+        
+        # Convert to PowerShell objects for easier manipulation
+        $results = @()
+                    
+        foreach ($row in $data) {
+            $results += [PSCustomObject]@{
+                DateDay   = $row.DateDay
+                State   = $row.State
+                Eaches = $row.Eaches
+            }
+
+        }
+
+        TableDisplay -Data $results `
+                -RowProperty "DateDay" `
+                -ColumnProperty "State" `
+                -ValueProperty "Eaches"
+                #-ColorThresholds @{High = $Decant_high; Medium = $Decant_medium}
+
+        Pause
+    }
+    catch {
+        Write-Host $_ -ForegroundColor Red
+        Pause
+    }
+    
+
+}
 <#
 
  PROCESSING SCRIPTS SECTION END
@@ -539,7 +787,7 @@ function RunSqlQuery {
 
     # Modern connection string with Windows Auth and encryption
     $connectionString = "Server=$SQLServer;Database=$SQLDatabase;Integrated Security=True;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30;"
-   
+    
     $connection = New-Object System.Data.SqlClient.SqlConnection $connectionString
     $command    = $connection.CreateCommand()
     $command.CommandText = $Query
@@ -602,5 +850,5 @@ function HelpMenu {
 }
 
 
-# Starting the Scripts.
+# Starting the Scripts. 
 MainMenu
