@@ -1,12 +1,31 @@
 Clear-Host
-$Host.UI.RawUI.WindowTitle = "Nathaniel Ritchie RandomScript"
+$Host.UI.RawUI.WindowTitle = "NR WCS Performance Dashboard - AUKC01"
 
 # Force TLS 1.2 or higher (TLS 1.0 and 1.1 are deprecated)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
 
-# Global ENUM do not touch please - all SQL is based upon this for selection of UOM.
+# Life hack from Nathaniel, stuff up function scopes and so now create a work around in the shape of a global variabel
+$Global:currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$Global:currentUOM = "EACHES" # Default UOM, can be changed by user selection in functions that require it. Will be used for KPI calculations and display.
 
+function futureupdate{
+    # Later for moduleCheck lol
+    Install-Module Graphical -scope CurrentUser
+    Import-Module Graphical
+}
+
+
+#Function to go through correct order of start up processes - only because I not used to script style
+
+#Helper Compare Functions
+
+function isValidSysSelectionEnum{
+    param ([int]$userSelection)
+    return $userSelection -ne -1
+}
+
+# Global ENUM do not touch please - all SQL is based upon this for selection of UOM.
 enum UOM {
     Eaches = 1
     Totes = 2
@@ -14,12 +33,19 @@ enum UOM {
 }
 
 enum DECANT_UOM{
-    Eaches = 1
-    Totes = 2
-    Cartons = 3
+    EACHES = 1
+    TOTES = 2
+    CARTONS = 3
+}
+
+enum GTP_UOM {
+    EACHES = 1
+    #Totes = 2
+    CARTONS = 3
 }
 
 enum HOURS_DAY {
+    #ENUM - VALUE
     Hour00 = 0
     Hour01 = 1
     Hour02 = 2
@@ -48,6 +74,7 @@ enum HOURS_DAY {
 
 
 enum PICK_STATE{
+    #ENUM with Default Value
     CREATING
     EXPECTED
     PENDING
@@ -78,7 +105,7 @@ enum PICK_STATE{
 
 enum PICK_STATE_DASHBOARD {
     <#These are the ones we care about mainly...#>
-    PENDING
+    PENDING 
     WAIT_ALLOCATION
     UNSATISFIABLE
     UNPICKABLE
@@ -99,19 +126,23 @@ $global:SQLDatabase = "prodmis"
 $global:UseWindowsAuth = $true
 
 # Check for SqlServer module and install if not present
-if (-not (Get-Module -ListAvailable -Name SqlServer)) {
-    try {
-        Write-Host "SqlServer module not found. Installing..." -ForegroundColor Yellow
-        Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
-        Write-Host "SqlServer module installed successfully." -ForegroundColor Green
+function moduleCheck {
+
+    if (-not (Get-Module -ListAvailable -Name SqlServer)) {
+        try {
+            Write-Host "SqlServer module not found. Installing..." -ForegroundColor Yellow
+            Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            Write-Host "SqlServer module installed successfully." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "Failed to install SqlServer module. Please install it manually." -ForegroundColor Red
+            exit
+        }
+    } else {
+        Write-Host "SqlServer module is already installed." -ForegroundColor Green
     }
-    catch {
-        Write-Host "Failed to install SqlServer module. Please install it manually." -ForegroundColor Red
-        exit
-    }
-} else {
-    Write-Host "SqlServer module is already installed." -ForegroundColor Green
 }
+
 
 <#
 
@@ -181,7 +212,7 @@ function KPIsMenu {
         Write-Host "                 KPIs Menu:"
         Write-Host ""
         Write-Host "             [1]  Decant Performance"
-        Write-Host "             [2]  Picking Performance"
+        Write-Host "             [2]  GTP Picking Performance"
         Write-Host "             [3]  Packing Performance"
         Write-Host "             [4]  Receiving Performance"
         Write-Host "             __________________________________________________"
@@ -206,7 +237,7 @@ function KPIsMenu {
 
         switch ($choice.ToUpper()) {
             "1"  { DecantPerformance }
-            "2"  { Write-Host "Picking Performance not yet implemented" -ForegroundColor Yellow; Pause }
+            "2"  { GTPPickingPerformance }
             "3"  { Write-Host "Packing Performance not yet implemented" -ForegroundColor Yellow; Pause }
             "4"  { Write-Host "Receiving Performance not yet implemented" -ForegroundColor Yellow; Pause }
             "5"  { Write-Host "Quality Metrics not yet implemented" -ForegroundColor Yellow; Pause }
@@ -233,30 +264,30 @@ function KPIsMenu {
 
 ALL MENU DISPLAYS SECTION END
 
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
 #>
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
 <#
 
 QUERIES SECTION START
@@ -293,87 +324,216 @@ function DecantPerformanceQuery {
         [string]$targetDate = (queryDateUpdate), #(Get-Date -Format "yyyy-MM-dd"),  # Default to today's date
 
         # Will change to param for user input
-        [DECANT_UOM]$uom = 3
+        [DECANT_UOM]$uom = 2
         #1 is EACH
         #2 is TOTE
         #3 is CARTONS  # Assuming 1 represents Eaches, can be adjusted based on actual UOM values in the database
     )
 
+    Write-Host "The current default selection: $uom" -ForegroundColor Green
+    $userSelection = userUOMSelection -enumType ([DECANT_UOM])
+    
+    try {
+        if (isValidSysSelectionEnum -$userSelection) {
+            $uom = $userSelection
+        }
+    }
+    catch {
+        Write-Error "Bugger these enums..."
+    }
+   
+    [string]$DECANT_QUERY_EACHES
+    [string]$DECANT_QUERY_CARTONS
+    [string]$DECANT_QUERY_TOTES
+    $Global:currentUOM = [DECANT_UOM]$uom # Update global variable for display and KPI calculations. I know this is bad but it is late and I am tired. Will refactor later to remove global variable dependency.
 
-    # messsssyyyyy - make a switch statement later.    
-    if ($uom -eq 1) {
-        return @"
-        SELECT 
-        change_uid AS [User],
-        DATEPART(HOUR, event_time) AS [Hour],
-        SUM(quantity) AS [Eaches]
-    FROM mi_decant
-    WHERE CAST(event_time AS DATE) = '$targetDate'
-        AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
-        AND change_uid IS NOT NULL
-        AND quantity IS NOT NULL
-    GROUP BY change_uid, DATEPART(HOUR, event_time)
-    ORDER BY change_uid, DATEPART(HOUR, event_time);
-"@
-    } else {
-        
-        # We want to count number of TOTES. Therefore we change the query.
-        if ($uom -eq 2){
-            return @"
+    $DECANT_QUERY_EACHES = @"
             SELECT 
             change_uid AS [User],
             DATEPART(HOUR, event_time) AS [Hour],
-            COUNT(tote_id) AS [Eaches]
-        FROM mi_decant
-        WHERE CAST(event_time AS DATE) = '$targetDate'
-            AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
-            AND change_uid IS NOT NULL
-            AND quantity IS NOT NULL
-        GROUP BY change_uid, DATEPART(HOUR, event_time)
-        ORDER BY change_uid, DATEPART(HOUR, event_time);
-"@
-
-        } else {
-            if ($uom -eq 3){
-                return @"
-                SELECT 
-                change_uid AS [User],
-                DATEPART(HOUR, event_time) AS [Hour],
-                COUNT(DISTINCT(case_id)) AS [Eaches]
+            SUM(quantity) AS [Eaches]
+        FROM (
+            SELECT
+                quantity,
+                change_uid,
+                event_time,
+                tote_id,
+                DATEDIFF(SECOND, 
+                    MIN(event_time) OVER (PARTITION BY tote_id, sku_id), 
+                    event_time
+                ) AS secs_from_first
             FROM mi_decant
             WHERE CAST(event_time AS DATE) = '$targetDate'
                 AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
                 AND change_uid IS NOT NULL
                 AND quantity IS NOT NULL
+        ) deduped
+        WHERE secs_from_first = 0 OR secs_from_first > 300  -- 300 seconds = 5 minutes
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $DECANT_QUERY_CARTONS = @"
+            SELECT 
+                change_uid AS [User],
+                DATEPART(HOUR, event_time) AS [Hour],
+                COUNT(tote_id) AS [Eaches]
+            FROM (
+                SELECT 
+                    change_uid,
+                    event_time,
+                    tote_id,
+                    DATEDIFF(SECOND, 
+                        MIN(event_time) OVER (PARTITION BY tote_id, sku_id), 
+                        event_time
+                    ) AS secs_from_first
+                FROM mi_decant
+                WHERE CAST(event_time AS DATE) = '$targetDate'
+                    AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
+                    AND change_uid IS NOT NULL
+                    AND quantity IS NOT NULL
+            ) deduped
+            WHERE secs_from_first = 0 OR secs_from_first > 300  -- 300 seconds = 5 minutes
             GROUP BY change_uid, DATEPART(HOUR, event_time)
             ORDER BY change_uid, DATEPART(HOUR, event_time);
 "@
 
-            }
-        }
+    $DECANT_QUERY_TOTES = @"
+            SELECT 
+                change_uid AS [User],
+                DATEPART(HOUR, event_time) AS [Hour],
+                COUNT(DISTINCT(case_id)) AS [Eaches]
+            FROM (
+                SELECT 
+                    case_id,
+                    change_uid,
+                    event_time,
+                    tote_id,
+                    DATEDIFF(SECOND, 
+                        MIN(event_time) OVER (PARTITION BY tote_id, sku_id), 
+                        event_time
+                    ) AS secs_from_first
+                FROM mi_decant
+                WHERE CAST(event_time AS DATE) = '$targetDate'
+                    AND oel_class = 'OEL_DECANT_STOCK_TOTE_COMPLETED'
+                    AND change_uid IS NOT NULL
+                    AND quantity IS NOT NULL
+            ) deduped
+            WHERE secs_from_first = 0 OR secs_from_first > 300  -- 300 seconds = 5 minutes
+            GROUP BY change_uid, DATEPART(HOUR, event_time)
+            ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
 
+    switch ([int]$uom) {
+        1 { return $DECANT_QUERY_EACHES }
+        2 { return $DECANT_QUERY_TOTES }
+        3 { return $DECANT_QUERY_CARTONS }
+        default { Write-Host "Invalid UOM selection. No idea how you could achieve this Defaulting to $uom." -ForegroundColor Yellow; return $GTP_QUERY_EACHES }
     }
-    
 
+    # messsssyyyyy - make a switch statement later.    
+}
+
+function GTPPickingPerformanceQuery {
+    param (
+        [string]$targetDate = (queryDateUpdate),  # Default to today's date
+        [GTP_UOM]$uom = 1
+    )
+    
+    Write-Host "The current default selection: $uom, Totes is not available!" -ForegroundColor Green
+    $userSelection = userUOMSelection -enumType ([GTP_UOM])
+    
+    Try {
+        if (isValidSysSelectionEnum $userSelection) {
+            $uom = $userSelection
+        }
+    }
+    catch {
+        Write-Host "Hate these enums..." -ForegroundColor Red
+    }
+
+    $Global:currentUOM = [GTP_UOM]$uom # Update global variable for display and KPI calculations. I know this is bad but it is late and I am tired. Will refactor later to remove global variable dependency.
+
+    # Similar to decant performance, we will need to adjust the query based on UOM selection.
+    # Do we need to worry about batch picking?!? Do we need to seperate CMC to many questions..
+    [string]$GTP_QUERY_EACHES
+    [string]$GTP_QUERY_TOTES
+    [string]$GTP_QUERY_CARTONS
+
+    $GTP_QUERY_EACHES = @" 
+    SELECT 
+        change_uid AS [User],
+        DATEPART(HOUR, event_time) AS [Hour],
+        SUM(qty) AS [Eaches]
+    FROM 
+        mi_pick
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND oel_class = 'OEL_PICK_PICKED'
+        AND change_uid IS NOT NULL
+        AND qty IS NOT NULL
+    GROUP BY change_uid, DATEPART(HOUR, event_time)
+    ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    # STOCK TOTES IS GONNA BE A ROUGHHHH ONE TO CALCULATE.
+    # Reason being is one stock tote can go to three different cartons in GTP station
+    # We do 1 to 3 picking set up... rip. Maybe remove entire thing as options...
+    $GTP_QUERY_TOTES = @"
+    NOT IN USE!!! Enjoy the error if you manage to call this...
+"@
+
+    $GTP_QUERY_CARTONS = @"
+    SELECT 
+        change_uid AS [User],
+        DATEPART(HOUR, event_time) AS [Hour],
+        COUNT(stock_tm_id) AS [Eaches]
+    FROM 
+        mi_pick
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND oel_class = 'OEL_PICK_PICKED'
+        AND change_uid IS NOT NULL
+        AND qty IS NOT NULL
+    GROUP BY change_uid, DATEPART(HOUR, event_time)
+    ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    switch ([int]$uom) {
+        1 { return $GTP_QUERY_EACHES }
+        2 { return $GTP_QUERY_TOTES }
+        3 { return $GTP_QUERY_CARTONS }
+        default { Write-Host "Invalid UOM selection. No idea how you could achieve this Defaulting to $uom." -ForegroundColor Yellow; return $GTP_QUERY_EACHES }
+    }
+}
+
+function TestQuery {
+    return @"
+    SELECT TOP 10 *
+    FROM x_du
+"@
 }
 
 function ConsumableUsageQuery {
-    return @"
-SELECT 
+    #ToDo -> Look through the TM. 
+    [string]$ConsumableQueryString
+    
+    $ConsumableQueryString = @"
+    SELECT 
     CAST(state_change_time AS DATE) AS [Date],
     planned_tm_sub_type_id AS [CartonType],
     COUNT(DISTINCT CASE 
         WHEN planned_tm_sub_type_id = 'CMC CARTON' THEN du_id 
         ELSE tm_id 
-    END) AS [CartonCount]
-FROM x_du
-WHERE du_state IN ('LOADED','BUFFERED','PACKED','FINISHED')
-    AND order_packing_type != 'REPACK'
-    AND state_change_time >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
-    AND state_change_time <= GETDATE()
-GROUP BY CAST(state_change_time AS DATE), planned_tm_sub_type_id
-ORDER BY CAST(state_change_time AS DATE), planned_tm_sub_type_id
+        END) AS [CartonCount]
+    FROM x_du
+    WHERE du_state IN ('LOADED','BUFFERED','PACKED','FINISHED')
+        AND order_packing_type != 'REPACK'
+        AND state_change_time >= DATEADD(DAY, -7, CAST(GETDATE() AS DATE))
+        AND state_change_time <= GETDATE()
+    GROUP BY CAST(state_change_time AS DATE), planned_tm_sub_type_id
+    ORDER BY CAST(state_change_time AS DATE), planned_tm_sub_type_id
 "@
+
+return $ConsumableQueryString
 }
 
 function EachesPerDayQuery {
@@ -402,6 +562,42 @@ function EachesPerDayQuery {
 "@
 
 }
+
+function GTPUtilisationQuery {
+    return @"
+    SELECT
+    event_time,
+    tm_type,
+    tm_id,
+        'GTP' + RIGHT('0' + SUBSTRING(
+            location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        ), 2) AS GTP_code
+    FROM [prodmis].[dbo].[mi_tm]
+    WHERE (event_time > DATEADD(DAY, -3, GETDATE()))
+    AND change_field = 'location'
+    AND (location LIKE 'GTP-PICK-%:01' OR location LIKE 'GTP-PUT-%:01')
+    ORDER BY event_time ASC;
+"@
+}
+
+function BrandDistributionQuery {
+    return @"
+    SELECT 
+        x_sku.brand_id,
+        SUBSTRING(x_stock.tm_location, 3, 2) AS AisleID,
+        x_stock.*, GETDATE() AS query_time 
+    FROM x_stock
+    JOIN x_sku ON x_stock.sku_id = x_sku.sku_id
+        WHERE x_stock.tm_id LIKE '8%'
+    AND x_stock.qty > 0
+    AND x_stock.tm_location LIKE 'MS%';
+"@
+}
+
+
+
 <#
 
  QUERIES SECTION END
@@ -454,8 +650,41 @@ function UserSelectDate{
     return $targetDate
 }
 
+function userUOMSelection {
+    param (
+        [type]$enumType
+    )
+
+    # Get all enum names and values dynamically from whatever enum is passed in
+    $enumValues = [Enum]::GetValues($enumType)
+
+    Write-Host "`nSelect a Unit of Measure:"
+    foreach ($val in $enumValues) {
+        Write-Host "  $([int]$val) - $val"
+    }
+    Write-Host ""
+
+    $userInput = Read-Host "Enter selection (or press Enter to use default)"
+
+    # Empty input — signal caller to use its default
+    if ([string]::IsNullOrWhiteSpace($userInput)) {
+        return -1
+    }
+
+    # Validate input against the enum
+    $parsed = 0
+    if ([int]::TryParse($userInput, [ref]$parsed)) {
+        if ($enumValues -contains [Enum]::ToObject($enumType, $parsed)) {
+            return $parsed
+        }
+    }
+
+    Write-Host "Invalid selection. Using default." -ForegroundColor Yellow
+    return -1
+}
+
 function queryDateUpdate{
-    $targetDate = Get-Date -Format "yyyy-MM-dd"
+    $targetDate = UserSelectDate
     return $targetDate
 }
 
@@ -473,8 +702,9 @@ function TableDisplay {
         
         [Parameter(Mandatory=$true)]
         [string]$ValueProperty,    # e.g., "Eaches"
-        
         [hashtable]$ColorThresholds = @{},  # Optional color coding
+
+        
         
         [Type]$ColumnEnumOverride = $null,  # NEW: Enum type to use for columns instead
 
@@ -509,11 +739,13 @@ function TableDisplay {
     foreach ($col in $columns) {
         $colDisplay = if ($ColumnProperty -eq "Hour") 
         { "{0:D2}h" -f [int]$col 
-        } elseif ($col -is [Enum]) {
-            if ($showEnumValue) { [int]$col } else {$col.ToString()}
+        } elseif ($null -ne $ColumnEnumOverride) {
+            # if we're using an enum override. 
+                if ($ShowEnumValues) { [int]$col } else {$col.ToString()}
             } else { 
                 $col 
             }
+
         $maxColWidth = $colDisplay.ToString().Length
         
         # Check all values in this column 
@@ -537,10 +769,14 @@ function TableDisplay {
     # Header row
     Write-Host ($RowProperty.PadRight($RowPadding)) -NoNewline -ForegroundColor Cyan
     foreach ($col in $columns) {
-        $colDisplay = if ($ColumnProperty -eq "Hour") { "{0:D2}h" -f [int]$col 
-    } elseif ($col -is [Enum]) {
-            [int]$col
-        } else { $col }
+        $colDisplay = if ($ColumnProperty -eq "Hour") { 
+            "{0:D2}h" -f [int]$col 
+    } elseif ($null -ne $ColumnEnumOverride) {
+            if ($ShowEnumValues) { [int]$col} else { $col.ToString() }
+        } else { 
+            $col 
+        }
+
         $width = $columnWidths[$col]
         Write-Host ($colDisplay.ToString().PadLeft($width)) -NoNewline -ForegroundColor Cyan
     }
@@ -649,6 +885,10 @@ function DecantPerformance {
     $Decant_medium = 50    
     $continueRunning = $true
     #Refresh does not work!
+
+    
+
+
     while ($continueRunning) {
        
         Clear-Host
@@ -656,11 +896,7 @@ function DecantPerformance {
         Write-Host "                  DECANT PERFORMANCE - HOURLY BREAKDOWN" -ForegroundColor Cyan
         Write-Host "==================================================================" -ForegroundColor Cyan
         Write-Host ""
-
-        #Need to update the function later...
-        $targetDate = Get-Date -Format "yyyy-MM-dd"
-        Write-Host "Querying decant data for: $targetDate" -ForegroundColor Green
-        Write-Host ""
+        Write-Host "UOM DISPLAYED BELOW IS: $($Global:currentUOM)" -ForegroundColor Red
 
         try {
              # Execute the query
@@ -690,15 +926,6 @@ function DecantPerformance {
                     -ColumnEnumOverride ([HOURS_DAY]) `
                     -ColorThresholds @{High = $Decant_high; Medium = $Decant_medium}
                     
-
-            Write-Host ""
-            Write-Host "==================================================================" -ForegroundColor Cyan
-            Write-Host "Color Legend: "
-            Write-Host "Green >= $Decant_high eaches/hr  " -ForegroundColor Green
-            Write-Host "Yellow >= $Decant_medium eaches/hr  " -ForegroundColor Yellow
-            Write-Host "White < $Decant_medium eaches/hr" -ForegroundColor White
-            Write-Host "==================================================================" -ForegroundColor Cyan
-            Write-Host ""
 
 
             # Last updated timestamp
@@ -744,6 +971,107 @@ function DecantPerformance {
             Write-Host "`n`rRefreshing data..." -ForegroundColor Yellow
         }
     }
+}
+
+function GTPPickingPerformance {
+    
+    param (
+        [string]$query = (GTPPickingPerformanceQuery),
+        [int]$refreshInterval = 7000
+    )
+    
+    # Huhhhhhhhhhhhhhh
+    $GTPPicking_high = 200; 
+    $GTPPicking_medium = 100;
+
+    #cannotttt wait to get rid of this global variable dependency. I should not have done this...
+    $continueRunning = $true
+
+    while ($continueRunning) {
+       
+        Clear-Host
+        Write-Host "==================================================================" -ForegroundColor Cyan
+        Write-Host "                  GTP PICKING PERFORMANCE - HOURLY BREAKDOWN" -ForegroundColor Cyan
+        Write-Host "==================================================================" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "UOM DISPLAYED BELOW IS: $($Global:currentUOM)" -ForegroundColor Red
+        #Need to update the function later...
+
+        try {
+             # Execute the query
+            $data = SQLdirector -query $query
+            if ($data.Rows.Count -eq 0) {
+                Write-Host "No GTP PICKING data found for $targetDate" -ForegroundColor Yellow
+                Pause
+                return
+            }
+
+            # Convert to PowerShell objects for easier manipulation
+            $results = @()
+            
+            foreach ($row in $data) {
+                $results += [PSCustomObject]@{
+                    User   = $row.User
+                    Hour   = $row.Hour
+                    Eaches = $row.Eaches
+                }
+            
+            }
+            
+            TableDisplay -Data $results `
+                    -RowProperty "User" `
+                    -ColumnProperty "Hour" `
+                    -ValueProperty "Eaches" `
+                    -ColumnEnumOverride ([HOURS_DAY]) `
+                    -ColorThresholds @{High = $GTPPicking_high; Medium = $GTPPicking_medium}
+                    
+
+            # Last updated timestamp
+            Write-Host ""
+            Write-Host "Query Ran at: $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Green
+            Write-Host "Press Enter to exit." -ForegroundColor Yellow
+        }
+        catch {
+            Write-Host "Error retrieving GTP Picking performance data: $_" -ForegroundColor Red
+            Pause
+        }
+
+        # Refresh countdown with exit options
+        Write-Host ""
+        $secondsRemaining = $refreshInterval
+        $keyPressed = $false
+
+        while ($secondsRemaining -gt 0 -and -not $keyPressed) {
+            
+            if ($host.UI.RawUI.KeyAvailable) {
+                $key = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                
+                # Check for Enter (13), Esc (27), or Q (81)
+                if ($key.VirtualKeyCode -eq 13 -or $key.VirtualKeyCode -eq 27 -or $key.VirtualKeyCode -eq 81) {
+                    $keyPressed = $true
+                    $continueRunning = $false
+                    Clear-Host
+                    Write-Host "Returning to menu..." -ForegroundColor Yellow
+                    break
+                }
+            }
+
+            $minutes = [math]::Floor($secondsRemaining / 60)
+            $seconds = $secondsRemaining % 60
+
+            Write-Host ("`rNext refresh in: {0:D2}:{1:D2}  (Press Enter/Esc/Q to exit)" -f $minutes, $seconds) -NoNewline -ForegroundColor Cyan
+            
+            Start-Sleep -Seconds 1
+            $secondsRemaining--
+        }
+
+        if (-not $keyPressed) {
+            Write-Host "`n`rRefreshing data..." -ForegroundColor Yellow
+        }
+    }
+    
+
+
 }
 
 function ConsumableUsage {
@@ -818,8 +1146,9 @@ function EachesPerDay {
                 -RowProperty "DateDay" `
                 -ColumnProperty "State" `
                 -ValueProperty "Eaches" `
-                -ColumnEnumOverride ([PICK_STATE_DASHBOARD]) `
-                -ShowEnumValues $true
+                -ColumnEnumOverride ([PICK_STATE_DASHBOARD])
+                 
+                
         Pause
     }
     catch {
@@ -921,9 +1250,6 @@ function RunSqlQuery {
  SQL PROCESSING SECTION END
 
 #>
-
-
-
 function InventoryQueryMenu {
     Write-Host "Inventory Query Menu not yet implemented" -ForegroundColor Yellow
     Pause
@@ -956,6 +1282,18 @@ function HelpMenu {
     Pause
 }
 
+function runProgram {
+    # Checking the module installing
+     moduleCheck
+ 
+     $size.Width = 150
+     $size.Height = 50
+     $Host.UI.RawUI.WindowSize = $size
+ 
+     # Launch main menu
+     MainMenu
+ }
+ 
 
-# Starting the Scripts. 
-MainMenu
+
+runProgram
