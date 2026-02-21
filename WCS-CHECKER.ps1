@@ -1,3 +1,4 @@
+#region psSetup
 Clear-Host
 $Host.UI.RawUI.WindowTitle = "NR WCS Performance Dashboard - AUKC01"
 
@@ -25,7 +26,17 @@ function isValidSysSelectionEnum{
     return $userSelection -ne -1
 }
 
-# Global ENUM do not touch please - all SQL is based upon this for selection of UOM.
+#endregion
+
+
+
+
+
+
+
+
+#region decEnums
+
 enum UOM {
     Eaches = 1
     Totes = 2
@@ -71,7 +82,6 @@ enum HOURS_DAY {
     Hour22 = 22
     Hour23 = 23
 }
-
 
 enum PICK_STATE{
     #ENUM with Default Value
@@ -120,6 +130,17 @@ enum PICK_STATE_DASHBOARD {
     ABANDONED
     CANCELLED
 }
+#endregion
+
+
+
+
+
+
+
+
+#region connectionSettings
+
 # SQL Server connection settings - Windows Authentication
 $global:SQLServer   = "SQLDBAUP010"
 $global:SQLDatabase = "prodmis"
@@ -144,11 +165,17 @@ function moduleCheck {
 }
 
 
-<#
+#endregion
 
-ALL MENU DISPLAYS SECTION START
 
-#>
+
+
+
+
+
+
+#region menuScreens
+
 
 # Manin menu function that user sees at the start of everything
 function MainMenu {
@@ -258,41 +285,16 @@ function KPIsMenu {
 }
 
 
+#endregion
 
 
-<#
 
-ALL MENU DISPLAYS SECTION END
 
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#>
-<#
 
-QUERIES SECTION START
 
-#>
+
+
+#region queryDeclarations
 
 function FillPercentageQuery {
     
@@ -597,39 +599,17 @@ function BrandDistributionQuery {
 }
 
 
+#endregion
 
-<#
 
- QUERIES SECTION END
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#>
-<#
 
- PROCESSING SCRIPTS SECTION START
 
-#>
+
+
+
+
+#region helperFunctions
+
 function UserSelectDate{
     
     # Prompt for date selection
@@ -850,6 +830,17 @@ function Get-CellColor {
     }
 }
 
+
+#endregion
+
+
+
+
+
+
+
+
+#region callerFunctions
 
 function FillPercentage {
     param (
@@ -1158,41 +1149,49 @@ function EachesPerDay {
     
 
 }
-<#
 
- PROCESSING SCRIPTS SECTION END
+function InventoryQueryMenu {
+    Write-Host "Inventory Query Menu not yet implemented" -ForegroundColor Yellow
+    Pause
+}
 
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#>
-<#
+function Method2 {
+    Write-Host "Method2 not yet implemented" -ForegroundColor Yellow
+    Pause
+}
 
- SQL PROCESSING SECTION START
+function Troubleshoot {
+    Write-Host "Troubleshoot not yet implemented" -ForegroundColor Yellow
+    Pause
+}
 
- THIS SHOULD REQUIRE MINIM CHANGES TO THE SQL CONNECTION CODE IN THE FUTURE IF WE DECIDE TO SWITCH TO SQL AUTH OR CHANGE SERVERS, ETC.
+function Extras {
+    Write-Host "Extras not yet implemented" -ForegroundColor Yellow
+    Pause
+}
 
-#>
+function HelpMenu {
+    Clear-Host
+    Write-Host "Help Menu" -ForegroundColor Cyan
+    Write-Host "==========" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "This script provides various database query options."
+    Write-Host "Using Windows Authentication with your current credentials."
+    Write-Host "Reach out to Nathaniel Ritchie if you ever need help!!!"
+    Write-Host ""
+    Pause
+}
+
+#endregion
+
+
+
+
+
+
+
+
+#region queryRunning
 
 # SQLdirector function - simplified for Windows Authentication
 function SQLdirector {
@@ -1245,42 +1244,19 @@ function RunSqlQuery {
         $connection.Dispose()
     }
 }
-<#
 
- SQL PROCESSING SECTION END
 
-#>
-function InventoryQueryMenu {
-    Write-Host "Inventory Query Menu not yet implemented" -ForegroundColor Yellow
-    Pause
-}
 
-function Method2 {
-    Write-Host "Method2 not yet implemented" -ForegroundColor Yellow
-    Pause
-}
+#endregion
 
-function Troubleshoot {
-    Write-Host "Troubleshoot not yet implemented" -ForegroundColor Yellow
-    Pause
-}
 
-function Extras {
-    Write-Host "Extras not yet implemented" -ForegroundColor Yellow
-    Pause
-}
 
-function HelpMenu {
-    Clear-Host
-    Write-Host "Help Menu" -ForegroundColor Cyan
-    Write-Host "==========" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "This script provides various database query options."
-    Write-Host "Using Windows Authentication with your current credentials."
-    Write-Host "Reach out to Nathaniel Ritchie if you ever need help!!!"
-    Write-Host ""
-    Pause
-}
+
+
+
+
+
+#region mainProcessing
 
 function runProgram {
     # Checking the module installing
@@ -1297,3 +1273,4 @@ function runProgram {
 
 
 runProgram
+#endregion
