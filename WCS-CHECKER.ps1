@@ -16,12 +16,12 @@
 #>
 
 
-#region decEnums
+#region declareEnums
 
 enum UOM {
-    Eaches = 1
-    Totes = 2
-    Cartons = 3
+    EACHES = 1
+    TOTES = 2
+    CARTONS = 3
 }
 
 enum DECANT_UOM{
@@ -34,6 +34,19 @@ enum GTP_UOM {
     EACHES = 1
     #Totes not supported. - 1-to-3 picking makes tote counting unreliable
     CARTONS = 3
+}
+
+enum REPLEN_UOM {
+    #Eaches not supporty - Linking between case - tm is not worth it. EACHES = 1
+    #Totes not supported. - Totes are not in automation for picking.
+    CARTONS = 3
+    PALLET = 4
+}
+
+enum GTPUTILISATION_UOM {
+    CARTON_CMC = 1
+    TOTES   = 2
+    CARTON_CMC_TOTES_COMBINED = 3
 }
 
 enum HOURS_DAY {
@@ -102,13 +115,25 @@ function Get-DashboardConfig {
     [OutputType([hashtable])]
     param()
 
-    return @{
+
+
+    $config = @{
         SQLServer             = "SQLDBAUP010"
         SQLDatabase           = "prodmis"
         DefaultRefreshSeconds = 7000
+
+        # Ideally these thresholds would be based on historical performance data and aligned with business goals. For now, just placeholders to demonstrate colour coding.
+        # Allso consider making these configurable at runtime in future updates.
+        # And also other function for overarching rather than just this? Who Knows...
         DecantThresholds      = @{ High = 100; Medium = 50 }
         GTPThresholds         = @{ High = 200; Medium = 100 }
+        ReplenishmentThresholds = @{ High = 150; Medium = 75 }
+        GTPUTILISATIONThresholds  = @{ High = 100; Medium = 75 }
     }
+
+    
+
+    return $config
 }
 #endregion
 
@@ -133,6 +158,12 @@ function Get-DashboardConfig {
 function Assert-SqlModule {
     [CmdletBinding()]
     param()
+    
+
+    if ($Script:TestMode) {
+        Write-Host "TEST MODE: SqlServer module check skipped." -ForegroundColor Magenta
+        return
+    }
 
     if (-not (Get-Module -ListAvailable -Name SqlServer)) {
         try {
@@ -215,7 +246,12 @@ function Invoke-SqlQueryDirect {
         [string]$Database = (Get-DashboardConfig).SQLDatabase
     )
 
+   
+
+
     $connectionString = "Server=$Server;Database=$Database;Integrated Security=True;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30;"
+
+
     $connection = New-Object System.Data.SqlClient.SqlConnection $connectionString
     $command    = $connection.CreateCommand()
     $command.CommandText = $Query
@@ -224,7 +260,9 @@ function Invoke-SqlQueryDirect {
 
     try {
         $connection.Open()
+        
         [void]$adapter.Fill($table)
+        
         return $table
     }
     catch {
@@ -232,7 +270,9 @@ function Invoke-SqlQueryDirect {
         throw
     }
     finally {
-        if ($connection.State -eq 'Open') { $connection.Close() }
+        if ($connection.State -eq 'Open') { 
+            $connection.Close()
+         }
         $connection.Dispose()
     }
 }
@@ -261,14 +301,18 @@ function Read-DateSelection {
     [OutputType([string])]
     param()
 
+
     $dateInput = Read-Host "Enter date (YYYY-MM-DD) or press Enter for today"
 
+
     if ([string]::IsNullOrWhiteSpace($dateInput)) {
-        return (Get-Date -Format "yyyy-MM-dd")
+        $today = (Get-Date -Format "yyyy-MM-dd")
+        return $today
     }
 
     try {
-        return [DateTime]::Parse($dateInput).ToString("yyyy-MM-dd")
+        $parsed = [DateTime]::Parse($dateInput).ToString("yyyy-MM-dd")
+        return $parsed
     }
     catch {
         Write-Host "Invalid date format. Using today's date." -ForegroundColor Yellow
@@ -304,6 +348,7 @@ function Read-EnumSelection {
         [type]$EnumType
     )
 
+
     $enumValues = [Enum]::GetValues($EnumType)
 
     Write-Host "`nSelect a Unit of Measure:"
@@ -314,10 +359,12 @@ function Read-EnumSelection {
 
     $userInput = Read-Host "Enter selection (or press Enter to use default)"
 
-    if ([string]::IsNullOrWhiteSpace($userInput)) { return -1 }
+    if ([string]::IsNullOrWhiteSpace($userInput)) { 
+        return -1 }
 
     $parsed = 0
     if ([int]::TryParse($userInput, [ref]$parsed)) {
+        
         if ($enumValues -contains [Enum]::ToObject($EnumType, $parsed)) {
             return $parsed
         }
@@ -385,10 +432,16 @@ function Get-CellColor {
         [hashtable]$Thresholds
     )
 
-    if ($Thresholds.Count -eq 0) { return "White" }
+    if ($Thresholds.Count -eq 0) { 
+        return "White" }
 
-    if ($Value -ge $Thresholds.High)   { return "Green"  }
-    if ($Value -ge $Thresholds.Medium) { return "Yellow" }
+    if ($Value -ge $Thresholds.High)   { 
+        return "Green" 
+     }
+    if ($Value -ge $Thresholds.Medium) { 
+        return "Yellow"
+     }
+
     return "Red"
 }
 
@@ -916,8 +969,8 @@ function Get-GTPPickingQuery {
 "@
 
     $query = switch ([int]$Uom) {
-        1 {  $GTP_QUERY_EACHES }
-        2 {  $GTP_QUERY_TOTES }
+        1 { $GTP_QUERY_EACHES }
+        2 { $GTP_QUERY_TOTES }
         3 { $GTP_QUERY_CARTONS }
         default { 
         Write-Host "Invalid UOM selection. No idea how lol Default to eaches." -ForegroundColor Yellow; 
@@ -926,6 +979,99 @@ function Get-GTPPickingQuery {
     }
 
     return @{Query = $query; UOM = $Uom}
+}
+
+
+<#
+.SYNOPSIS
+    Returns a Replenishment Picking Performance SQL query based on the chosen unit of measure.
+.DESCRIPTION
+    Builds one of two usable query variants (Eaches, and Totes is NOT supported):
+      - CARTONS (UOM 3): COUNT(DISTINCT(case_id))  — carton count
+      - PALLETS (UOM 4): COUNT(DISTINCT(pick_task_id))  — individual rough pallet count
+.PARAMETER TargetDate
+    Date to query. Prompts user if not supplied.
+.PARAMETER Uom
+    REPLEN_UOM enum value. Default CARTONS (3). User is prompted to change.
+.OUTPUTS
+    [hashtable] with keys: Query [string], UOM [REPLEN_UOM]
+.EXAMPLE
+    $result = Get-ReplenishmentPerformanceQuery
+    $result.Query   # - T-SQL string
+    $result.UOM     # - [REPLEN_UOM]::CARTONS
+
+    $result = Get-ReplenishmentPerformanceQuery -TargetDate "2025-06-01" -Uom ([REPLEN_UOM]::CARTONS)
+#>
+function Get-ReplenishmentPerformanceQuery {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param   (
+        [string]$targetDate,
+        [REPLEN_UOM]$Uom = [REPLEN_UOM]::CARTONS
+    )
+    #todo: Set a enum of default UOM?
+
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Eaches and Totes not available)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([REPLEN_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [REPLEN_UOM]$userSelection
+    }
+
+    # Again, we have three different queries based on UOM selection. The main complexity is deduplicating events that occur within 5 minutes for the same tote_id + sku_id, which likely represent QA checks and release at the  decant space being recorded multiple times in WCS.
+
+    $REPLEN_QUERY_EACHES = @"
+    Invalid Selection. Eaches not available. How did you even get this far?
+"@
+
+    $REPLEN_QUERY_TOTES = @"
+    Invalid Selection. Totes not available. How did you even get this far?
+"@
+    
+    $REPLEN_QUERY_CARTONS = @"
+            SELECT 
+                change_uid AS [User],
+                DATEPART(HOUR, event_time) AS [Hour],
+                COUNT(DISTINCT(case_id)) AS [Eaches]
+            FROM mi_manual_full_case_picking
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+                AND oel_class = 'OEL_MANUAL_FULL_CASE_PICKING_PICK_COMPLETED'
+                AND change_uid IS NOT NULL
+                AND quantity IS NOT NULL
+            GROUP BY change_uid, DATEPART(HOUR, event_time)
+            ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $REPLEN_QUERY_PALLET = @"
+            SELECT 
+                change_uid AS [User],
+                DATEPART(HOUR, event_time) AS [Hour],
+                COUNT(DISTINCT(pick_task_id)) AS [Eaches]
+            FROM mi_manual_full_case_picking
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+                AND oel_class = 'OEL_MANUAL_FULL_CASE_PICKING_PICK_COMPLETED'
+                AND change_uid IS NOT NULL
+                AND quantity IS NOT NULL
+            GROUP BY change_uid, DATEPART(HOUR, event_time)
+            ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $query = switch ([int]$Uom) {
+        1 { $REPLEN_QUERY_EACHES }
+        2 { $REPLEN_QUERY_TOTES }
+        3 { $REPLEN_QUERY_CARTONS }
+        4 { $REPLEN_QUERY_PALLET }
+        default { 
+            #todo: Hardcoding the default is wild. Later will update.
+            Write-Host "Invalid UOM. Defaulting to Cartons." -ForegroundColor Yellow;
+            $REPLEN_QUERY_CARTONS 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
+
 }
 
 
@@ -1017,27 +1163,108 @@ function Get-EachesPerDayQuery {
 .OUTPUTS
     [string] — T-SQL query.
 #>
+
 function Get-GTPUtilisationQuery {
     [CmdletBinding()]
-    [OutputType([string])]
-    param()
+    [OutputType([hashtable])]
+    param(
+        [string]$targetDate,
+        [GTPUTILISATION_UOM]$Uom = [GTPUTILISATION_UOM]::CARTON_CMC
+    )
+    #todo: Set a enum of default UOM?
 
-    return @"
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Eaches and Totes not available)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([GTPUTILISATION_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [GTPUTILISATION_UOM]$userSelection
+    }
+
+
+    $GTPUTILISATION_QUERY_CARTONS_CMC = 
+    @"
     SELECT
-    event_time,
-    tm_type,
-    tm_id,
+        DATEPART(HOUR, event_time) AS [Hour],
         'GTP' + RIGHT('0' + SUBSTRING(
             location,
             LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
             CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
-        ), 2) AS GTP_code
-    FROM [prodmis].[dbo].[mi_tm]
-    WHERE (event_time > DATEADD(DAY, -3, GETDATE()))
-    AND change_field = 'location'
-    AND (location LIKE 'GTP-PICK-%:01' OR location LIKE 'GTP-PUT-%:01')
-    ORDER BY event_time ASC;
+        ), 2) AS [User],
+        COUNT(*) AS [Eaches]
+    FROM mi_tm
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND change_field = 'location'
+        AND (location LIKE 'GTP-PICK-%:01' OR location LIKE 'GTP-PUT-%:01')
+        AND (tm_type = 'carton' OR (tm_type = 'TOTE' AND tm_id LIKE '7%'))
+    GROUP BY
+        DATEPART(HOUR, event_time),
+        SUBSTRING(location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        )
+    ORDER BY [Hour] ASC;
 "@
+
+  
+    $GTPUTILISATION_QUERY_TOTES = @"
+    SELECT
+        DATEPART(HOUR, event_time) AS [Hour],
+        'GTP' + RIGHT('0' + SUBSTRING(
+            location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        ), 2) AS [User],
+        COUNT(*) AS [Eaches]
+    FROM mi_tm
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND change_field = 'location'
+        AND (location LIKE 'GTP-PICK-%:01' OR location LIKE 'GTP-PUT-%:01')
+        AND (tm_type = 'TOTE' AND tm_id NOT LIKE '7%')
+    GROUP BY
+        DATEPART(HOUR, event_time),
+        SUBSTRING(location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        )
+    ORDER BY [Hour] ASC;
+"@
+
+    $GTPUTILISATION_QUERY_COMBINED = @"
+    SELECT
+        DATEPART(HOUR, event_time) AS [Hour],
+        'GTP' + RIGHT('0' + SUBSTRING(
+            location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        ), 2) AS [User],
+        COUNT(*) AS [Eaches]
+    FROM mi_tm
+    WHERE CAST(event_time AS DATE) = '$targetDate'
+        AND change_field = 'location'
+        AND (location LIKE 'GTP-PICK-%:01' OR location LIKE 'GTP-PUT-%:01')
+    GROUP BY
+        DATEPART(HOUR, event_time),
+        SUBSTRING(location,
+            LEN(location) - CHARINDEX('-', REVERSE(location)) + 1,
+            CHARINDEX(':', location) - (LEN(location) - CHARINDEX('-', REVERSE(location)) + 1)
+        )
+    ORDER BY [Hour] ASC;
+"@
+
+
+    $query = switch([int]$Uom) {
+        1 { $GTPUTILISATION_QUERY_CARTONS_CMC }
+        2 { $GTPUTILISATION_QUERY_TOTES }
+        3 { $GTPUTILISATION_QUERY_COMBINED }
+        default { 
+        Write-Host "Invalid UOM selection. No idea how lol Default to eaches." -ForegroundColor Yellow; 
+        $GTPUTILISATION_QUERY_CARTONS_CMC 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
 }
 
 <#
@@ -1111,8 +1338,6 @@ function Invoke-FillPercentage {
         Write-Host "Finished executing Fill Percentage." -ForegroundColor Yellow
     }
 }
-
-
 
 
 <#
@@ -1227,6 +1452,21 @@ function Invoke-GTPPickingPerformance {
     Show-HourlyDashboard -Title "GTP PICKING PERFORMANCE" -QueryResult $qr -Thresholds $cfg.GTPThresholds
 }
 
+<#
+.SYNOPSIS
+    Launches the Replenishment Performance dashboard.
+.EXAMPLE
+    Invoke-ReplenishmentPerformance
+#>
+function Invoke-ReplenishmentPerformance {
+    [CmdletBinding()]
+    param()
+
+    $cfg = Get-DashboardConfig
+    $qr  = Get-ReplenishmentPerformanceQuery
+    Show-HourlyDashboard -Title "REPLENISHMENT PERFORMANCE" -QueryResult $qr -Thresholds $cfg.ReplenishmentThresholds
+}
+
 
 <#
 .SYNOPSIS
@@ -1305,6 +1545,24 @@ function Invoke-EachesPerDay {
     }
 }
 
+<#
+.SYNOPSIS
+    Displays through put of GTP locations by hour.
+.EXAMPLE
+    Invoke-GTPUtilisation
+#>
+
+function Invoke-GTPUtilisation {
+    [CmdletBinding()]
+    param()
+
+    $cfg = Get-DashboardConfig
+    $qr  = Get-GTPUtilisationQuery
+    Show-HourlyDashboard -Title "GTP UTILISATION" -QueryResult $qr -Thresholds $cfg.GTPUTILISATIONThresholds
+
+}
+
+
 #Place holders Screens not yet implemented, to avoid user confusion and errors if they click something we haven't built yet.
 function Invoke-InventoryQueryMenu { Write-Host "Inventory Query Menu not yet implemented" -ForegroundColor Yellow; Pause }
 function Invoke-Troubleshoot       { Write-Host "Troubleshoot not yet implemented" -ForegroundColor Yellow; Pause }
@@ -1351,25 +1609,27 @@ function Show-KPIsMenu {
         Clear-Host
         Write-Host ""
         Write-Host "       ______________________________________________________________"
-        Write-Host ""
+        Write-Host "        GREEN = WORKING " -ForegroundColor Green -NoNewline
+        Write-Host ":: YELLOW = SOON! " -ForegroundColor Yellow -NoNewline
+        Write-Host ":: RED = NOT SET UP " -ForegroundColor Red
         Write-Host "                 KPIs Menu:"
         Write-Host ""
-        Write-Host "             [1]  Decant Performance"
-        Write-Host "             [2]  GTP Picking Performance"
-        Write-Host "             [3]  Packing Performance"
-        Write-Host "             [4]  Receiving Performance"
+        Write-Host "             [1]  Decant Performance"   -ForegroundColor Green
+        Write-Host "             [2]  GTP Picking Performance" -ForegroundColor Green
+        Write-Host "             [3]  Replenishment Performance" -ForegroundColor Green
+        Write-Host "             [4]  Receiving Performance" -ForegroundColor Yellow 
         Write-Host "             __________________________________________________"
         Write-Host ""
-        Write-Host "             [5]  Quality Metrics"
-        Write-Host "             [6]  Cycle Count Accuracy"
-        Write-Host "             [7]  Order Fulfillment Rate"
-        Write-Host "             [8]  Putaway Efficiency"
+        Write-Host "             [5]  Quality Metrics" -ForegroundColor Red
+        Write-Host "             [6]  Cycle Count Accuracy" -ForegroundColor Red
+        Write-Host "             [7]  Order Fulfillment Rate" -ForegroundColor Red
+        Write-Host "             [8]  Putaway Efficiency" -ForegroundColor Red
         Write-Host "             __________________________________________________"
         Write-Host ""
-        Write-Host "             [9]  Inventory Turnover"
-        Write-Host "             [10] Dock-to-Stock Time"
-        Write-Host "             [11] Labor Productivity"
-        Write-Host "             [12] Returns Processing"
+        Write-Host "             [9]  Inventory Turnover" -ForegroundColor Red
+        Write-Host "             [10] Dock-to-Stock Time" -ForegroundColor Red
+        Write-Host "             [11] Labor Productivity" -ForegroundColor Red
+        Write-Host "             [12] Returns Processing" -ForegroundColor Red
         Write-Host "             __________________________________________________"
         Write-Host ""
         Write-Host "             [B] Back to Main Menu"
@@ -1381,7 +1641,7 @@ function Show-KPIsMenu {
         switch ($choice.ToUpper()) {
             "1"  { Invoke-DecantPerformance }
             "2"  { Invoke-GTPPickingPerformance }
-            "3"  { Write-Host "Packing Performance not yet implemented" -ForegroundColor Yellow; Pause }
+            "3"  { Invoke-ReplenishmentPerformance }
             "4"  { Write-Host "Receiving Performance not yet implemented" -ForegroundColor Yellow; Pause }
             "5"  { Write-Host "Quality Metrics not yet implemented" -ForegroundColor Yellow; Pause }
             "6"  { Write-Host "Cycle Count Accuracy not yet implemented" -ForegroundColor Yellow; Pause }
@@ -1418,24 +1678,26 @@ function Show-MainMenu {
 
         Write-Host ""
         Write-Host "       ______________________________________________________________"
-        Write-Host ""
+        Write-Host "        GREEN = WORKING " -ForegroundColor Green -NoNewline
+        Write-Host ":: YELLOW = SOON! " -ForegroundColor Yellow -NoNewline
+        Write-Host ":: RED = NOT SET UP " -ForegroundColor Red
         Write-Host "                 Logs Methods:"
         Write-Host ""
-        Write-Host "             [1] Fill Percentage                          - AUKC01"
-        Write-Host "             [2] Consumable Usage (WIP)                   - AUKC01"
-        Write-Host "             [3] Operation KPIs Menu                      - AUKC01"
-        Write-Host "             [4] Picks By Day                             - AUKC01"
+        Write-Host "             [1] Fill Percentage                          - AUKC01" -ForegroundColor Green
+        Write-Host "             [2] Consumable Usage (WIP)                   - AUKC01" -ForegroundColor Green
+        Write-Host "             [3] Operation KPIs Menu                      - AUKC01" -ForegroundColor Green
+        Write-Host "             [4] Picks By Day                             - AUKC01" -ForegroundColor Green
         Write-Host "             __________________________________________________"
         Write-Host ""
-        Write-Host "             [5] Random Selection 5"
-        Write-Host "             [6] Random Selection 6"
-        Write-Host "             [7] Random Selection 7"
+        Write-Host "             [5] GTP Utilisation" -ForegroundColor Green
+        Write-Host "             [6] Random Selection 6" -ForegroundColor Red
+        Write-Host "             [7] Random Selection 7" -ForegroundColor Red
         Write-Host "             __________________________________________________"
         Write-Host ""
-        Write-Host "             [8] Troubleshoot"
-        Write-Host "             [E] Extras"
-        Write-Host "             [H] Help"
-        Write-Host "             [0] Exit"
+        Write-Host "             [8] Troubleshoot" -ForegroundColor Red
+        Write-Host "             [E] Extras" -ForegroundColor Red
+        Write-Host "             [H] Help" -ForegroundColor Green
+        Write-Host "             [0] Exit" -ForegroundColor Green
         Write-Host "       ______________________________________________________________"
         Write-Host ""
 
@@ -1446,9 +1708,9 @@ function Show-MainMenu {
             "2" { Invoke-ConsumableUsage }
             "3" { Show-KPIsMenu }
             "4" { Invoke-EachesPerDay }
-            "5" { Write-Host "Option 5 not implemented"; Pause }
-            "6" { Write-Host "Option 6 not implemented"; Pause }
-            "7" { Write-Host "Option 7 not implemented"; Pause }
+            "5" { Invoke-GTPUtilisation }
+            "6" { Write-Host "Its red... why did you select!"; Pause }
+            "7" { Write-Host "Its red... why did you select!"; Pause }
             "8" { Invoke-Troubleshoot }
             "E" { Invoke-Extras }
             "H" { Show-HelpMenu }
