@@ -788,8 +788,6 @@ function Get-DecantPerformanceQuery {
     Write-Host "Current default UOM selection: $Uom" -ForegroundColor Green
     $userSelection = Read-EnumSelection -EnumType ([DECANT_UOM])
 
-    Write-Host "The current default selection: $Uom" -ForegroundColor Green
-    $userSelection = userUOMSelection -enumType ([DECANT_UOM])
     if (Test-ValidEnumSelection -UserSelection $userSelection) {
         $Uom = [DECANT_UOM]$userSelection
     }
@@ -1149,10 +1147,10 @@ function Get-EachesPerDayQuery {
     return @"
     SELECT 
         pick_state AS [State],
-        DATEPART(DAY,$filter) AS [DateDay],
+        CONVERT(CHAR(10), $filter, 120) AS [DateDay],
         SUM(each_qty) AS [Eaches]
     FROM x_pick
-    GROUP BY pick_state, DATEPART(DAY,$filter);
+    GROUP BY pick_state, CONVERT(CHAR(10), $filter, 120);
 "@
 
 }
