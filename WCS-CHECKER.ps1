@@ -788,8 +788,6 @@ function Get-DecantPerformanceQuery {
     Write-Host "Current default UOM selection: $Uom" -ForegroundColor Green
     $userSelection = Read-EnumSelection -EnumType ([DECANT_UOM])
 
-    Write-Host "The current default selection: $Uom" -ForegroundColor Green
-    $userSelection = userUOMSelection -enumType ([DECANT_UOM])
     if (Test-ValidEnumSelection -UserSelection $userSelection) {
         $Uom = [DECANT_UOM]$userSelection
     }
