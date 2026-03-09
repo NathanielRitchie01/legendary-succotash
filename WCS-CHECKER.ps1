@@ -43,6 +43,26 @@ enum REPLEN_UOM {
     PALLET = 4
 }
 
+enum PUTAWAY_UOM {
+    EACHES = 1
+    #Totes not supported. Totes is automation? Should not be sending geting delivery from cleint for totes I hope..
+    CARTONS = 3
+    PALLET = 4
+}
+
+enum RECEIVING_UOM {
+    EACHES = 1
+    #Totes not supported. Totes is automation? Should not be sending geting delivery from cleint for totes I hope..
+    CARTONS = 3
+    PALLET = 4
+}
+
+enum INBOUND_TRAMMING_UOM {
+    # Only pallets thanks.
+    PALLET = 4
+}
+
+
 enum GTPUTILISATION_UOM {
     CARTON_CMC = 1
     TOTES   = 2
@@ -129,6 +149,9 @@ function Get-DashboardConfig {
         GTPThresholds         = @{ High = 200; Medium = 100 }
         ReplenishmentThresholds = @{ High = 150; Medium = 75 }
         GTPUTILISATIONThresholds  = @{ High = 100; Medium = 75 }
+        PutawayThresholds     = @{ High = 100; Medium = 90 }
+        ReceivingThresholds = @{ High = 100; Medium = 90 }
+        InboundTrammingThresholds = @{ High = 50; Medium = 20 }
     }
 
     
@@ -1289,6 +1312,396 @@ function Get-BrandDistributionQuery {
 "@
 }
 
+<#
+.SYNOPSIS
+    Returns a Inbound - Putaway Performance SQL query based on the chosen unit of measure.
+.DESCRIPTION
+    Builds one of two usable query variants (Totes is NOT supported):
+      - EACHES  (UOM 1): SUM(quantity)       — individual item count
+      - CARTONS (UOM 3): COUNT(DISTINCT(case_id))  — carton count
+      - PALLETS (UOM 4): COUNT(DISTINCT(pallet_id))  — individual rough pallet count
+.PARAMETER TargetDate
+    Date to query. Prompts user if not supplied.
+.PARAMETER Uom
+    PUTAWAY_UOM enum value. Default CARTONS (3). User is prompted to change.
+.OUTPUTS
+    [hashtable] with keys: Query [string], UOM [PUTAWAY_UOM]
+.EXAMPLE
+    $result = Get-PutawayPerformanceQuery
+    $result.Query   # - T-SQL string
+    $result.UOM     # - [PUTAWAY_UOM]::CARTONS
+
+    $result = Get-PutawayPerformanceQuery -TargetDate "2025-06-01" -Uom ([PUTAWAY_UOM]::CARTONS)
+#>
+function Get-PutawayPerformanceQuery {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param   (
+        [string]$targetDate,
+        [PUTAWAY_UOM]$Uom = [PUTAWAY_UOM]::CARTONS
+    )
+    #todo: Set a enum of default UOM?
+
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Totes not available)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([PUTAWAY_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [PUTAWAY_UOM]$userSelection
+    }
+
+    $OEL_CLASS_FILTER_CASE = "OEL_CASE_PUTAWAY_CASE_STORED"  # For memory sake
+    $OEL_CLASS_FILTER_PALLET = "OEL_CASE_PUTAWAY_COMPLETE"  # For memory sake: Remove qty != null filter as this event doesn't log quantity, but does log pallet_id which we can count distinct of for pallet performance.
+    # Again, we have three different queries based on UOM selection. The main complexity is deduplicating events that occur within 5 minutes for the same tote_id + sku_id, which likely represent QA checks and release at the  decant space being recorded multiple times in WCS.
+
+    $PUTAWAY_QUERY_EACHES = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            SUM(quantity) AS [Eaches]
+        FROM mi_case_putaway
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_CASE_STORED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $PUTAWAY_QUERY_TOTES = @"
+    Invalid Selection. Totes not available. How did you even get this far?
+"@
+    
+    $PUTAWAY_QUERY_CARTONS = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(case_id)) AS [Eaches]
+        FROM mi_case_putaway
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_CASE_STORED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $PUTAWAY_QUERY_PALLET = @"
+        SELECT
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(pallet_id)) AS [Eaches]
+            FROM mi_case_putaway
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_COMPLETE'
+            AND change_uid IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $query = switch ([int]$Uom) {
+        1 { $PUTAWAY_QUERY_EACHES }
+        2 { $PUTAWAY_QUERY_TOTES }
+        3 { $PUTAWAY_QUERY_CARTONS }
+        4 { $PUTAWAY_QUERY_PALLET }
+        default { 
+            #todo: Hardcoding the default is wild. Later will update.
+            Write-Host "Invalid UOM. Defaulting to Cartons." -ForegroundColor Yellow;
+            $PUTAWAY_QUERY_CARTONS 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
+
+}
+
+
+<#
+.SYNOPSIS
+    Returns a Inbound - Receiving Performance SQL query based on the chosen unit of measure.
+.DESCRIPTION
+    Builds one of two usable query variants (Totes is NOT supported):
+      - EACHES  (UOM 1): SUM(quantity)       — individual item count
+      - CARTONS (UOM 3): COUNT(DISTINCT(case_id))  — carton count
+      - PALLETS (UOM 4): COUNT(DISTINCT(pallet_id))  — individual rough pallet count
+.PARAMETER TargetDate
+    Date to query. Prompts user if not supplied.
+.PARAMETER Uom
+    RECEVEING_UOM enum value. Default CARTONS (3). User is prompted to change.
+.OUTPUTS
+    [hashtable] with keys: Query [string], UOM [RECEVEING_UOM]
+.EXAMPLE
+    $result = Get-ReceivingPerformanceQuery
+    $result.Query   # - T-SQL string
+    $result.UOM     # - [RECEVEING_UOM]::CARTONS
+
+    $result = Get-ReceivingPerformanceQuery -TargetDate "2025-06-01" -Uom ([RECEVEING_UOM]::CARTONS)
+#>
+function Get-ReceivingPerformanceQuery {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param   (
+        [string]$targetDate,
+        [RECEIVING_UOM]$Uom = [RECEIVING_UOM]::CARTONS
+    )
+    #todo: Set a enum of default UOM?
+
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Totes not available)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([RECEIVING_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [RECEVEING_UOM]$userSelection
+    }
+
+    # Again, we have three different queries based on UOM selection. The main complexity is deduplicating events that occur within 5 minutes for the same tote_id + sku_id, which likely represent QA checks and release at the  decant space being recorded multiple times in WCS.
+
+    $RECEIVING_QUERY_EACHES = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            SUM(quantity) AS [Eaches]
+        FROM mi_receiving
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_RECEIVING_CASE_RECEIVED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $RECEIVING_QUERY_TOTES = @"
+    Invalid Selection. Totes not available. How did you even get this far?
+"@
+    
+    $RECEIVING_QUERY_CARTONS = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(case_id)) AS [Eaches]
+        FROM mi_receiving
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_RECEIVING_CASE_RECEIVED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $RECEIVING_QUERY_PALLET = @"
+        SELECT
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(pallet_id)) AS [Eaches]
+            FROM mi_receiving
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_RECEIVING_CASE_RECEIVED'
+            AND change_uid IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $query = switch ([int]$Uom) {
+        1 { $RECEIVING_QUERY_EACHES }
+        3 { $RECEIVING_QUERY_CARTONS }
+        4 { $RECEIVING_QUERY_PALLET }
+        default { 
+            #todo: Hardcoding the default is wild. Later will update.
+            Write-Host "Invalid UOM. Defaulting to Cartons." -ForegroundColor Yellow;
+            $RECEIVING_QUERY_CARTONS 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
+
+}
+
+function Get-PutawayPerformanceQuery {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param   (
+        [string]$targetDate,
+        [PUTAWAY_UOM]$Uom = [PUTAWAY_UOM]::CARTONS
+    )
+    #todo: Set a enum of default UOM?
+
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Totes not available)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([PUTAWAY_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [PUTAWAY_UOM]$userSelection
+    }
+
+    $OEL_CLASS_FILTER_CASE = "OEL_CASE_PUTAWAY_CASE_STORED"  # For memory sake
+    $OEL_CLASS_FILTER_PALLET = "OEL_CASE_PUTAWAY_COMPLETE"  # For memory sake: Remove qty != null filter as this event doesn't log quantity, but does log pallet_id which we can count distinct of for pallet performance.
+    # Again, we have three different queries based on UOM selection. The main complexity is deduplicating events that occur within 5 minutes for the same tote_id + sku_id, which likely represent QA checks and release at the  decant space being recorded multiple times in WCS.
+
+    $PUTAWAY_QUERY_EACHES = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            SUM(quantity) AS [Eaches]
+        FROM mi_case_putaway
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_CASE_STORED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $PUTAWAY_QUERY_TOTES = @"
+    Invalid Selection. Totes not available. How did you even get this far?
+"@
+    
+    $PUTAWAY_QUERY_CARTONS = @"
+        SELECT 
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(case_id)) AS [Eaches]
+        FROM mi_case_putaway
+        WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_CASE_STORED'
+            AND change_uid IS NOT NULL
+            AND quantity IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $PUTAWAY_QUERY_PALLET = @"
+        SELECT
+            change_uid AS [User],
+            DATEPART(HOUR, event_time) AS [Hour],
+            COUNT(DISTINCT(pallet_id)) AS [Eaches]
+            FROM mi_case_putaway
+            WHERE CAST(event_time AS DATE) = '$targetDate'
+            AND oel_class = 'OEL_CASE_PUTAWAY_COMPLETE'
+            AND change_uid IS NOT NULL
+        GROUP BY change_uid, DATEPART(HOUR, event_time)
+        ORDER BY change_uid, DATEPART(HOUR, event_time);
+"@
+
+    $query = switch ([int]$Uom) {
+        1 { $PUTAWAY_QUERY_EACHES }
+
+        3 { $PUTAWAY_QUERY_CARTONS }
+        4 { $PUTAWAY_QUERY_PALLET }
+        default { 
+            #todo: Hardcoding the default is wild. Later will update.
+            Write-Host "Invalid UOM. Defaulting to Cartons." -ForegroundColor Yellow;
+            $PUTAWAY_QUERY_CARTONS 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
+
+}
+
+
+<#
+.SYNOPSIS
+    Returns a Inbound - Receiving Performance SQL query based on the chosen unit of measure.
+.DESCRIPTION
+    Builds one of two usable query variants (Totes is NOT supported):
+      - EACHES  (UOM 1): SUM(quantity)       — individual item count
+      - CARTONS (UOM 3): COUNT(DISTINCT(case_id))  — carton count
+      - PALLETS (UOM 4): COUNT(DISTINCT(pallet_id))  — individual rough pallet count
+.PARAMETER TargetDate
+    Date to query. Prompts user if not supplied.
+.PARAMETER Uom
+    RECEVEING_UOM enum value. Default CARTONS (3). User is prompted to change.
+.OUTPUTS
+    [hashtable] with keys: Query [string], UOM [RECEVEING_UOM]
+.EXAMPLE
+    $result = Get-ReceivingPerformanceQuery
+    $result.Query   # - T-SQL string
+    $result.UOM     # - [RECEVEING_UOM]::CARTONS
+
+    $result = Get-ReceivingPerformanceQuery -TargetDate "2025-06-01" -Uom ([RECEVEING_UOM]::CARTONS)
+#>
+function Get-InboundTrammingPerformanceQuery {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param   (
+        [string]$targetDate,
+        [INBOUND_TRAMMING_UOM]$Uom = [INBOUND_TRAMMING_UOM]::PALLET
+    )
+    
+
+    if (-not $targetDate){$targetDate = Read-DateSelection}
+
+    Write-Host "Current default UOM selection: $Uom (Only Pallets!)" -ForegroundColor Green
+    $userSelection = Read-EnumSelection -EnumType ([INBOUND_TRAMMING_UOM])
+    if (Test-ValidEnumSelection -UserSelection $userSelection) {
+        $Uom = [INBOUND_TRAMMING_UOM]$userSelection
+    }
+
+    # Again, we have three different queries based on UOM selection. The main complexity is deduplicating events that occur within 5 minutes for the same tote_id + sku_id, which likely represent QA checks and release at the  decant space being recorded multiple times in WCS.
+
+    $INBOUND_TRAMMING_QUERY_EACHES = @"
+    Invalid RIP!
+"@
+
+    $INBOUND_TRAMMING_QUERY_TOTES = @"
+    Invalid Selection. Totes not available. How did you even get this far?
+"@
+    
+    $INBOUND_TRAMMING_QUERY_CARTONS = @"
+    Invalid?
+"@
+
+    $INBOUND_TRAMMING_QUERY_PALLET = @"
+    SELECT
+        pickup.change_uid AS [User],
+        DATEPART(HOUR, pickup.event_time) AS [Hour],
+        COUNT(pickup.tm_id) AS [Eaches]
+    FROM mi_tramming AS pickup
+    CROSS APPLY (
+        SELECT TOP 1
+            event_time,
+            location
+        FROM mi_tramming
+        WHERE tm_id = pickup.tm_id
+            AND change_uid = pickup.change_uid
+            AND oel_class = 'OEL_TRAMMING_PALLET_DROPPED_OFF'
+            AND event_time > pickup.event_time
+        ORDER BY event_time ASC
+    ) AS dropoff
+    WHERE pickup.oel_class = 'OEL_TRAMMING_PALLET_PICKED_UP'
+        AND CAST(pickup.event_time AS DATE) = '$targetDate'
+        AND pickup.location LIKE 'RL%'
+        AND dropoff.location NOT LIKE 'PR%'
+        AND dropoff.location NOT LIKE 'S%'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM mi_tramming AS earlier
+            WHERE earlier.tm_id = pickup.tm_id
+                AND earlier.change_uid = pickup.change_uid
+                AND earlier.location = pickup.location
+                AND earlier.oel_class = 'OEL_TRAMMING_PALLET_PICKED_UP'
+                AND earlier.event_time < pickup.event_time
+                AND earlier.event_time >= DATEADD(SECOND, -120, pickup.event_time)
+        )
+    GROUP BY pickup.change_uid, DATEPART(HOUR, pickup.event_time)
+    ORDER BY pickup.change_uid, DATEPART(HOUR, pickup.event_time);
+"@
+
+    $query = switch ([int]$Uom) {
+        4 { $INBOUND_TRAMMING_QUERY_PALLET }
+        default { 
+            #todo: Hardcoding the default is wild. Later will update.
+            Write-Host "Invalid UOM. Defaulting to Cartons." -ForegroundColor Yellow;
+            $INBOUND_TRAMMING_QUERY_PALLET 
+        }
+    }
+
+    return @{Query = $query; UOM = $Uom}
+
+}
 
 #endregion
 
@@ -1560,6 +1973,35 @@ function Invoke-GTPUtilisation {
 
 }
 
+function  Invoke-PutawayPerformanceQuery {
+    [CmdletBinding()]
+    param ()
+    
+    $cfg = Get-DashboardConfig
+    $qr  = Get-PutawayPerformanceQuery
+    Show-HourlyDashboard -Title "PUTAWAY PERFORMANCE" -QueryResult $qr -Thresholds $cfg.PutawayThresholds
+
+}
+
+Function Invoke-ReceivingPerformanceQuery {
+    [CmdletBinding()]
+    param()
+
+    $cfg = Get-DashboardConfig
+    $qr = Get-ReceivingPerformanceQuery
+    Show-HourlyDashboard -Title "RECEIVING PERFORMANCE" -QueryResult $qr -Thresholds $cfg.ReceivingThresholds
+}
+
+Function Invoke-InboundTrammingPerformanceQuery {
+    [CmdletBinding()]
+    param()
+
+    $cfg = Get-DashboardConfig
+    $qr = Get-InboundTrammingPerformanceQuery
+    Show-HourlyDashboard -Title "INBOUND-TRAMMING PERFORMANCE" -QueryResult $qr -Thresholds $cfg.InboundTrammingThresholds
+
+}
+
 
 #Place holders Screens not yet implemented, to avoid user confusion and errors if they click something we haven't built yet.
 function Invoke-InventoryQueryMenu { Write-Host "Inventory Query Menu not yet implemented" -ForegroundColor Yellow; Pause }
@@ -1612,16 +2054,20 @@ function Show-KPIsMenu {
         Write-Host ":: RED = NOT SET UP " -ForegroundColor Red
         Write-Host "                 KPIs Menu:"
         Write-Host ""
+        Write-Host "             [1-4] Fulfilment Performance KPIs" -ForegroundColor Green
+        Write-Host ""
         Write-Host "             [1]  Decant Performance"   -ForegroundColor Green
         Write-Host "             [2]  GTP Picking Performance" -ForegroundColor Green
         Write-Host "             [3]  Replenishment Performance" -ForegroundColor Green
-        Write-Host "             [4]  Receiving Performance" -ForegroundColor Yellow 
+        Write-Host "             [4]  Idk some other one" -ForegroundColor Yellow 
         Write-Host "             __________________________________________________"
         Write-Host ""
-        Write-Host "             [5]  Quality Metrics" -ForegroundColor Red
-        Write-Host "             [6]  Cycle Count Accuracy" -ForegroundColor Red
-        Write-Host "             [7]  Order Fulfillment Rate" -ForegroundColor Red
-        Write-Host "             [8]  Putaway Efficiency" -ForegroundColor Red
+        Write-Host "             [5-8] Inbound Performance KPIs" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "             [5]  Receiving Performance" -ForegroundColor Green
+        Write-Host "             [6]  PutAway Performance" -ForegroundColor Green
+        Write-Host "             [7]  Inbound Tramming Performance" -ForegroundColor Green
+        Write-Host "             [8]  --- Efficiency" -ForegroundColor Red
         Write-Host "             __________________________________________________"
         Write-Host ""
         Write-Host "             [9]  Inventory Turnover" -ForegroundColor Red
@@ -1640,15 +2086,16 @@ function Show-KPIsMenu {
             "1"  { Invoke-DecantPerformance }
             "2"  { Invoke-GTPPickingPerformance }
             "3"  { Invoke-ReplenishmentPerformance }
-            "4"  { Write-Host "Receiving Performance not yet implemented" -ForegroundColor Yellow; Pause }
-            "5"  { Write-Host "Quality Metrics not yet implemented" -ForegroundColor Yellow; Pause }
-            "6"  { Write-Host "Cycle Count Accuracy not yet implemented" -ForegroundColor Yellow; Pause }
-            "7"  { Write-Host "Order Fulfillment Rate not yet implemented" -ForegroundColor Yellow; Pause }
-            "8"  { Write-Host "Putaway Efficiency not yet implemented" -ForegroundColor Yellow; Pause }
-            "9"  { Write-Host "Inventory Turnover not yet implemented" -ForegroundColor Yellow; Pause }
-            "10" { Write-Host "Dock-to-Stock Time not yet implemented" -ForegroundColor Yellow; Pause }
-            "11" { Write-Host "Labor Productivity not yet implemented" -ForegroundColor Yellow; Pause }
-            "12" { Write-Host "Returns Processing not yet implemented" -ForegroundColor Yellow; Pause }
+            "4"  { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
+            #Space for me
+            "5"  { Invoke-ReceivingPerformanceQuery}
+            "6"  { Invoke-PutawayPerformanceQuery}
+            "7"  { Invoke-InboundTrammingPerformanceQuery }
+            "8"  { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
+            "9"  { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
+            "10" { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
+            "11" { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
+            "12" { Write-Host "not yet implemented" -ForegroundColor Yellow; Pause }
             "B"  { return }
             default {
                 Write-Host "Invalid selection" -ForegroundColor Red
