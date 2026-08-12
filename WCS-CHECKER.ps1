@@ -3523,24 +3523,17 @@ function Show-MainMenu {
 function Show-UpdateNotice {
     Clear-Host
 
-    Write-Host "=============================================================" -ForegroundColor Red
-    Write-Host "                    WCS CHECKER UPDATE" -ForegroundColor Red
-    Write-Host "=============================================================" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Updated: " -NoNewline
-    Write-Host "04-08-2026" -ForegroundColor Yellow
-    Write-Host "Author : " -NoNewline
-    Write-Host "Nathaniel Ritchie" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "This release introduces updated SQL queries and reporting logic."
-    Write-Host "For the most accurate results, please ensure you are familiar"
-    Write-Host "with the new calculations and what they now remove."
-    Write-Host ""
-    Write-Host "This is expected to be the final standalone release before the"
-    Write-Host "tool is merged into the WCS Labour Tracker workbook."
-    Write-Host ""
-    Write-Host "Thank you for your continued feedback and support."
-    Write-Host "-Nathaniel Ritchie"
+    Write-Host "========================================================================================================================" -ForegroundColor Red -BackgroundColor White
+    Write-Host "               ALERT DATE 2026-08-12:                                                                                   " -ForegroundColor Red -BackgroundColor White
+    Write-Host "               This code is now out of date,                                                                            " -ForegroundColor Red -BackgroundColor White
+    Write-Host "               Access to all will be removed                                                                            " -ForegroundColor Red -BackgroundColor White
+    Write-Host "========================================================================================================================" -ForegroundColor Red -BackgroundColor White
+    Write-Host "                                                                                                                        " -BackgroundColor White
+    Write-Host "This code is now out of date, and will be removed from all users.                                                       " -ForegroundColor Black -BackgroundColor White
+    Write-Host "The updated version is now available within the site labour tracker.                                                    "-ForegroundColor Black -BackgroundColor White
+    Write-Host "This is stored within SharePoint and is accessible to all users with the correct permissions.                           "-ForegroundColor Black -BackgroundColor White
+    Write-Host "Please reach out to Nathaniel Ritchie if you need access to the new version.                                            "-ForegroundColor Black -BackgroundColor White
+    Write-Host "-Nathaniel Ritchie                                                                                                      " -ForegroundColor Black -BackgroundColor White
 
     for ($i = 10; $i -gt 0; $i--) {
         Write-Host "`rLaunching in $i second(s)... " -NoNewline -ForegroundColor Yellow
@@ -3549,7 +3542,6 @@ function Show-UpdateNotice {
 
     Clear-Host
 }
-
 
 
 #endregion
@@ -3586,7 +3578,7 @@ function Start-WCSCheckerConsole {
     # Set console size
     try {
         $size = $Host.UI.RawUI.WindowSize
-        $size.Width  = 150
+        $size.Width  = 350
         $size.Height = 50
         $Host.UI.RawUI.WindowSize = $size
     }
@@ -3595,14 +3587,33 @@ function Start-WCSCheckerConsole {
     }
 
     # Go
-    try {
-        Show-UpdateNotice
-        Show-MainMenu
+    $endDate = [datetime]"2026-08-25"
+
+    if ($endDate -le (Get-Date)) {
+    Clear-Host
+    Write-Host "========================================================================================================================" -ForegroundColor Red -BackgroundColor White
+    Write-Host "               ALERT DATE 2026-08-25:                                                                                   " -ForegroundColor Red -BackgroundColor White
+    Write-Host "               Access has been removed.                                                                                 " -ForegroundColor Red -BackgroundColor White
+    Write-Host "               - Nathaniel Ritchie                                                                                      " -ForegroundColor Red -BackgroundColor White
+    Write-Host "========================================================================================================================" -ForegroundColor Red -BackgroundColor White
+
+
+        <# Action to perform if the condition is true #>
+    } else {
+
+        try {
+            Show-UpdateNotice
+            Show-MainMenu
+        }
+        catch {
+            Write-Host "An error occurred: $_" -ForegroundColor Red
+            Pause
+        }
+        # Action to perform if the condition is false
     }
-    catch {
-        Write-Host "An error occurred: $_" -ForegroundColor Red
-        Pause
-    }
+
+
+
 
 }
 
